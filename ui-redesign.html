@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StarEye UI 重设计原型 — 常驻命令行 · 设置页 · REPL 控制台</title>
+<style>
+  :root[data-theme="light"]{
+    --bg:#eef1f3; --term-bg:#ffffff; --term-fg:#1b1f24;
+    --border:#8a9199; --panel-title:#6b7280; --muted:#6b7280;
+    --accent:#0e7490; --chrome-bg:#5a8ca0; --chrome-fg:#10151a;
+    --sel-bg:#ffd75f; --sel-fg:#10151a;
+    --scope-bg:#ffd75f; --scope-fg:#1b1f24;
+    --crit-bg:#961e1e; --crit-fg:#ffffff; --high:#c0392b; --med:#b8860b; --low:#2471a3; --info:#7f8c8d;
+    --ok:#1e8449; --err:#c0392b; --cmdbar-bg:#f4f6f7; --popup-bg:#ffffff; --ghost:#aab2b8;
+    --chip-bg:#eef1f3;
+  }
+  :root[data-theme="dark"]{
+    --bg:#0d1117; --term-bg:#101418; --term-fg:#d7dee4;
+    --border:#3d4750; --panel-title:#8b95a0; --muted:#8b95a0;
+    --accent:#5fd7f3; --chrome-bg:#5a8ca0; --chrome-fg:#0b1014;
+    --sel-bg:#ffd75f; --sel-fg:#10151a;
+    --scope-bg:#3a2f10; --scope-fg:#ffd75f;
+    --crit-bg:#961e1e; --crit-fg:#ffffff; --high:#e06060; --med:#d8a91c; --low:#5b9bd5; --info:#8b95a0;
+    --ok:#3fb27f; --err:#e06060; --cmdbar-bg:#151b21; --popup-bg:#151b21; --ghost:#4d5964;
+    --chip-bg:#1a222a;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:var(--bg); color:var(--term-fg);
+    font:14px/1.6 "Cascadia Mono","JetBrains Mono","Sarasa Term SC",Consolas,"Microsoft YaHei",monospace;
+    padding:28px 20px 60px;
+  }
+  .wrap{max-width:1060px; margin:0 auto;}
+  /* ---------- 原型页头（不属于 TUI 本身） ---------- */
+  .proto-head{margin-bottom:16px;}
+  .proto-head h1{font-size:18px; letter-spacing:.5px;}
+  .proto-head h1 b{color:var(--accent);}
+  .proto-head p{color:var(--muted); font-size:12.5px; margin-top:4px;}
+  .proto-actions{display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;}
+  .pbtn{
+    font:inherit; font-size:12.5px; padding:5px 12px; cursor:pointer;
+    background:var(--chip-bg); color:var(--term-fg);
+    border:1px solid var(--border); border-radius:6px;
+  }
+  .pbtn:hover{border-color:var(--accent); color:var(--accent);}
+  .pbtn.primary{background:var(--sel-bg); color:var(--sel-fg); border-color:var(--sel-bg); font-weight:700;}
+  /* ---------- 终端窗口 ---------- */
+  .term{
+    background:var(--term-bg); border:1px solid var(--border); border-radius:10px;
+    overflow:hidden; position:relative;
+    box-shadow:0 8px 30px rgba(0,0,0,.12);
+    display:flex; flex-direction:column;
+    font-size:13px; line-height:1.55;
+  }
+  .t-header{
+    display:flex; align-items:center; gap:14px; padding:5px 12px;
+    background:var(--chrome-bg); color:var(--chrome-fg); white-space:nowrap; overflow:hidden;
+  }
+  .t-header .brand{font-weight:700; color:var(--chrome-fg);}
+  .t-header .chip{background:rgba(0,0,0,.22); padding:0 8px; border-radius:4px;}
+  .t-header .target{font-weight:700;}
+  .t-header .clock{color:rgba(0,0,0,.55);}
+  :root[data-theme="dark"] .t-header .clock{color:rgba(255,255,255,.65);}
+  .t-header .spacer{flex:1;}
+  .t-header .llm{background:rgba(0,0,0,.18); padding:0 8px; border-radius:4px;}
+  .t-scope{
+    background:var(--scope-bg); color:var(--scope-fg);
+    padding:3px 12px; font-weight:700; font-size:12.5px; white-space:nowrap; overflow:hidden;
+  }
+  .t-tabs{display:flex; gap:2px; padding:4px 12px 0; border-bottom:1px solid var(--border);}
+  .t-tabs .tab{
+    padding:2px 10px; cursor:pointer; color:var(--muted); border-radius:4px 4px 0 0;
+    border:1px solid transparent; border-bottom:none; user-select:none;
+  }
+  .t-tabs .tab:hover{color:var(--term-fg);}
+  .t-tabs .tab.active{background:var(--sel-bg); color:var(--sel-fg); font-weight:700;}
+  .t-tabs .divider{color:var(--muted); align-self:center;}
+  /* ---------- 主体 ---------- */
+  .t-body{position:relative; flex:1; min-height:330px; padding:12px; overflow:hidden;}
+  .page{position:absolute; inset:12px; overflow:auto; display:none;}
+  .page.active{display:block;}
+  .panel{
+    position:relative; border:1px solid var(--border); border-radius:8px;
+    padding:12px 14px; margin-top:10px; background:var(--term-bg);
+  }
+  .panel:first-child{margin-top:0;}
+  .panel-title{
+    position:absolute; top:-0.72em; left:10px; padding:0 6px;
+    background:var(--term-bg); color:var(--panel-title); font-size:12px;
+  }
+  .grid2{display:grid; grid-template-columns:300px 1fr; gap:12px;}
+  .grid2 > .panel{margin-top:0;}
+  .chain{font-size:14px; letter-spacing:.5px;}
+  .chain .done{color:var(--ok);}
+  .chain .run{color:var(--accent); font-weight:700;}
+  .chain .pend{color:var(--muted);}
+  .chain .sep{color:var(--muted);}
+  .phase-note{margin-top:10px; color:var(--muted); font-size:12px;}
+  .sevrow{display:flex; justify-content:space-between; padding:1px 0; font-size:13px;}
+  .sevrow .n{font-weight:700;}
+  .sevrow.crit .n{background:var(--crit-bg); color:var(--crit-fg); padding:0 6px; border-radius:3px;}
+  .sevrow.high .n{color:var(--high);} .sevrow.med .n{color:var(--med);}
+  .sevrow.low .n{color:var(--low);} .sevrow.info .n{color:var(--info);}
+  .chips{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+  .chips .lbl{color:var(--muted); font-size:12px;}
+  .qchip{
+    font:inherit; font-size:12.5px; cursor:pointer; color:var(--term-fg);
+    background:var(--chip-bg); border:1px solid var(--border); border-radius:5px; padding:2px 10px;
+  }
+  .qchip:hover{border-color:var(--accent); color:var(--accent);}
+  .qchip::before{content:"❯ "; color:var(--accent);}
+  /* 活动流 */
+  .logline{white-space:pre; font-size:12.5px;}
+  .logline .t{color:var(--muted);}
+  .logline .lv{display:inline-block; width:44px; font-weight:700;}
+  .lv-INFO{color:var(--low);} .lv-RUN{color:var(--accent);} .lv-WARN{color:var(--med);} .lv-CRIT{color:var(--high);}
+  .logline .src{color:var(--muted);}
+  /* 发现 */
+  .frow{display:grid; grid-template-columns:52px 1fr 110px 70px; gap:8px; padding:3px 0; font-size:12.5px; align-items:center;}
+  .frow .badge{font-weight:700; text-align:center; border-radius:3px; padding:0 4px; font-size:11.5px;}
+  .b-crit{background:var(--crit-bg); color:var(--crit-fg);}
+  .b-high{color:var(--high); border:1px solid var(--high);}
+  .b-med{color:var(--med); border:1px solid var(--med);}
+  .b-low{color:var(--low); border:1px solid var(--low);}
+  .b-info{color:var(--info); border:1px solid var(--info);}
+  .frow .tgt,.frow .conf{color:var(--muted);}
+  /* 控制台 REPL */
+  .console-line{white-space:pre-wrap; font-size:12.5px; padding:1px 0;}
+  .console-line .p{color:var(--accent); font-weight:700;}
+  .console-line.cmd{color:var(--term-fg); font-weight:700;}
+  .console-line.out{color:var(--muted);}
+  .console-line.ok{color:var(--ok);}
+  .console-line.err{color:var(--err);}
+  .console-line.sys{color:var(--accent);}
+  /* 设置页表单 */
+  .form-grid{display:grid; grid-template-columns:96px 1fr; gap:8px 12px; align-items:center; font-size:12.5px;}
+  .form-grid label{color:var(--panel-title); text-align:right;}
+  .form-grid input,.form-grid select{
+    font:inherit; font-size:12.5px; width:100%; padding:3px 8px; color:var(--term-fg);
+    background:var(--term-bg); border:1px solid var(--border); border-radius:5px; outline:none;
+  }
+  .form-grid input:focus,.form-grid select:focus{border-color:var(--accent);}
+  .btn-row{display:flex; gap:8px; margin-top:12px; align-items:center; flex-wrap:wrap;}
+  .tbtn{
+    font:inherit; font-size:12.5px; cursor:pointer; padding:3px 14px;
+    background:var(--chip-bg); color:var(--term-fg); border:1px solid var(--border); border-radius:5px;
+  }
+  .tbtn:hover{border-color:var(--accent); color:var(--accent);}
+  .tbtn.primary{background:var(--sel-bg); color:var(--sel-fg); border-color:var(--sel-bg); font-weight:700;}
+  .tbtn.primary:hover{color:var(--sel-fg); filter:brightness(1.06);}
+  .status-line{margin-top:10px; font-size:12px; color:var(--muted); min-height:18px;}
+  .status-line.ok{color:var(--ok);} .status-line.err{color:var(--err);}
+  .keybadge{color:var(--muted); font-size:11.5px;}
+  .radio-row{display:flex; gap:14px; font-size:12.5px;}
+  .radio-row label{display:flex; gap:5px; align-items:center; cursor:pointer;}
+  .set-grid{display:grid; grid-template-columns:1.5fr 1fr; gap:12px;}
+  .set-grid > .panel{margin-top:0;}
+  /* ---------- 命令行（新增行） ---------- */
+  .t-cmdbar{
+    display:flex; align-items:center; gap:10px; padding:6px 12px;
+    background:var(--cmdbar-bg); border-top:1px solid var(--border);
+    cursor:text; position:relative; z-index:5;
+  }
+  .t-cmdbar .prompt{color:var(--accent); font-weight:700;}
+  .cmdline{flex:1; display:flex; align-items:center; white-space:pre; overflow:hidden; min-height:20px; position:relative;}
+  #cmdHidden{position:absolute; inset:0; opacity:0; width:100%; border:none; background:transparent;}
+  .cursor{
+    display:inline-block; width:.62em; height:1.15em; background:var(--accent);
+    animation:blink 1.1s steps(1) infinite; vertical-align:text-bottom; margin-left:1px;
+  }
+  @keyframes blink{50%{opacity:0;}}
+  .cmd-hint{color:var(--muted); font-size:11.5px; white-space:nowrap;}
+  /* 补全浮层 */
+  .ac-popup{
+    position:absolute; left:12px; right:12px; bottom:calc(100% + 6px); z-index:20;
+    background:var(--popup-bg); border:1px solid var(--border); border-radius:8px;
+    box-shadow:0 -6px 24px rgba(0,0,0,.18); overflow:hidden; display:none;
+  }
+  .ac-popup.open{display:block;}
+  .ac-title{
+    padding:3px 12px; font-size:11.5px; color:var(--panel-title);
+    border-bottom:1px solid var(--border); background:var(--cmdbar-bg);
+    display:flex; justify-content:space-between;
+  }
+  .ac-row{display:flex; gap:12px; padding:2px 12px; font-size:12.5px; cursor:pointer; align-items:baseline;}
+  .ac-row .nm{color:var(--accent); font-weight:700; min-width:150px;}
+  .ac-row .ds{color:var(--muted);}
+  .ac-row.sel{background:var(--sel-bg); color:var(--sel-fg);}
+  .ac-row.sel .nm,.ac-row.sel .ds{color:var(--sel-fg);}
+  /* ---------- 帮助浮层（只盖主体，不碰横幅） ---------- */
+  .help-overlay{
+    position:absolute; inset:0; z-index:15; display:none;
+    background:rgba(10,14,18,.45); backdrop-filter:blur(1.5px);
+    align-items:center; justify-content:center; padding:16px;
+  }
+  .help-overlay.open{display:flex;}
+  .help-panel{
+    background:var(--popup-bg); border:1px solid var(--border); border-radius:8px;
+    max-width:640px; width:100%; max-height:100%; overflow:auto; padding:14px 18px; font-size:12.5px;
+  }
+  .help-panel h3{font-size:13px; color:var(--accent); margin:10px 0 6px;}
+  .help-panel h3:first-child{margin-top:0;}
+  .help-panel .hk{display:grid; grid-template-columns:1fr 1fr; gap:2px 18px;}
+  .help-panel .cmdrow{display:flex; gap:10px;}
+  .help-panel .cmdrow .c{color:var(--accent); font-weight:700; min-width:170px;}
+  .help-panel .cmdrow .d{color:var(--muted);}
+  .help-panel .rule{margin-top:12px; color:var(--muted); border-top:1px dashed var(--border); padding-top:8px;}
+  /* ---------- 页脚 ---------- */
+  .t-footer{
+    display:flex; justify-content:space-between; padding:3px 12px;
+    border-top:1px solid var(--border); color:var(--muted); font-size:12px;
+  }
+  .t-footer .live{color:var(--accent); font-weight:700;}
+  /* ---------- 设计说明 ---------- */
+  .notes{margin-top:26px;}
+  .notes h2{font-size:15px; margin-bottom:10px;}
+  .notes h2 b{color:var(--accent);}
+  .note-card{
+    background:var(--term-bg); border:1px solid var(--border); border-radius:8px;
+    padding:12px 16px; margin-bottom:10px; font-size:12.8px;
+  }
+  .note-card b{color:var(--accent);}
+  .note-card pre{
+    background:var(--cmdbar-bg); border:1px solid var(--border); border-radius:6px;
+    padding:8px 12px; font-size:12px; margin-top:8px; overflow:auto;
+  }
+  .note-card ul{margin:6px 0 0 18px;}
+  .note-card li{margin:3px 0;}
+  .note-card table{border-collapse:collapse; margin-top:8px; width:100%;}
+  .note-card td,.note-card th{border:1px solid var(--border); padding:3px 10px; font-size:12px; text-align:left;}
+  .note-card th{background:var(--cmdbar-bg); color:var(--panel-title);}
+  @media (max-width:760px){
+    .grid2,.set-grid{grid-template-columns:1fr;}
+    .help-panel .hk{grid-template-columns:1fr;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ================= 原型操作区（不属于 TUI） ================= -->
+  <div class="proto-head">
+    <h1><b>StarEye</b> UI 重设计原型</h1>
+    <p>新增：常驻命令行（: 呼出 / 输入即补全）· 设置页（LLM 配置表单）· 控制台 REPL 化 · 顶栏 LLM 状态位。HTML 交互原型，未改动任何项目代码。</p>
+    <div class="proto-actions">
+      <button class="pbtn primary" id="btnDemoCmd">演示：呼出命令行（按 :）</button>
+      <button class="pbtn" id="btnDemoSet">演示：打开设置</button>
+      <button class="pbtn" id="btnDemoConsole">演示：控制台历史</button>
+      <button class="pbtn" id="btnDemoHelp">演示：帮助（按 ?）</button>
+      <button class="pbtn" id="btnTheme">切换深色 / 浅色</button>
+    </div>
+  </div>
+
+  <!-- ================= 终端窗口 ================= -->
+  <div class="term" id="term">
+
+    <!-- 行1 顶栏：状态 / 目标 / 计时 / LLM（铁律保持，只加一个 LLM 状态位） -->
+    <div class="t-header">
+      <span class="brand">StarEye</span>
+      <span class="chip" id="hdrPhase">● 扫描</span>
+      <span class="target" id="hdrTarget">目标 10.0.0.0/24</span>
+      <span class="clock" id="hdrClock">00:11:15</span>
+      <span class="spacer"></span>
+      <span class="llm" id="hdrLLM">LLM·gpt-4o</span>
+    </div>
+
+    <!-- 行2 作用域横幅：铁律——任何浮层不许遮盖它（帮助浮层只盖主体区） -->
+    <div class="t-scope" id="scopeBanner">作用域: 授权 2026-10-01 ~ 2026-11-01 · 排除 *.internal</div>
+
+    <!-- 行3 页签（第 5 个页签「设置」复用现有 Page 注册表机制） -->
+    <div class="t-tabs" id="tabs">
+      <span class="tab active" data-page="cockpit">总览</span><span class="divider">·</span>
+      <span class="tab" data-page="activity">活动流</span><span class="divider">·</span>
+      <span class="tab" data-page="findings">发现</span><span class="divider">·</span>
+      <span class="tab" data-page="console">控制台</span><span class="divider">·</span>
+      <span class="tab" data-page="settings">设置</span>
+    </div>
+
+    <!-- 行4 主体（弹性） -->
+    <div class="t-body" id="tbody">
+
+      <!-- 总览 -->
+      <section class="page active" id="page-cockpit">
+        <div class="grid2">
+          <div class="panel">
+            <span class="panel-title">攻击链</span>
+            <div class="chain">
+              <span class="done">侦察 ✓</span><span class="sep"> › </span><span class="run">扫描 ●62%</span><span class="sep"> › </span><span class="pend">验证 ·</span><span class="sep"> › </span><span class="pend">报告 ·</span>
+            </div>
+            <div class="phase-note">按 <b>:</b> 随时输入命令干预任何阶段，无需离开当前页</div>
+          </div>
+          <div class="panel">
+            <span class="panel-title">战果</span>
+            <div class="sevrow crit"><span>CRIT</span><span class="n">1</span></div>
+            <div class="sevrow high"><span>HIGH</span><span class="n">1</span></div>
+            <div class="sevrow med"><span>MED</span><span class="n">1</span></div>
+            <div class="sevrow low"><span>LOW</span><span class="n">1</span></div>
+            <div class="sevrow info"><span>INFO</span><span class="n">1</span></div>
+          </div>
+        </div>
+        <div class="panel">
+          <span class="panel-title">快捷指令 · 点击即执行（等价于在命令行输入）</span>
+          <div class="chips">
+            <span class="lbl">试试：</span>
+            <button class="qchip" data-cmd="scan 10.0.0.5">scan 10.0.0.5</button>
+            <button class="qchip" data-cmd=":config llm">:config llm</button>
+            <button class="qchip" data-cmd="llm test">llm test</button>
+            <button class="qchip" data-cmd="llm model gpt-4o-mini">llm model gpt-4o-mini</button>
+            <button class="qchip" data-cmd="export report.md">export report.md</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 活动流 -->
+      <section class="page" id="page-activity">
+        <div class="panel">
+          <span class="panel-title">活动流 · 实时</span>
+          <div class="logline"><span class="t">00:10:58</span> <span class="lv lv-INFO">INFO</span> <span class="src">agent·recon   </span>开始资产发现 10.0.0.0/24</div>
+          <div class="logline"><span class="t">00:11:02</span> <span class="lv lv-INFO">INFO</span> <span class="src">agent·recon   </span>存活主机 254 · 开放服务 1,182</div>
+          <div class="logline"><span class="t">00:11:04</span> <span class="lv lv-RUN">RUN</span>  <span class="src">scan·nmap    </span>-sV --top-ports 1000（62%）</div>
+          <div class="logline"><span class="t">00:11:07</span> <span class="lv lv-WARN">WARN</span> <span class="src">scan·nmap    </span>10.0.0.14:22 OpenSSH 8.2p1 (Ubuntu)</div>
+          <div class="logline"><span class="t">00:11:09</span> <span class="lv lv-INFO">INFO</span> <span class="src">agent·recon   </span>Web 资产 12 个 · 指纹 Nginx/1.18</div>
+          <div class="logline"><span class="t">00:11:11</span> <span class="lv lv-WARN">WARN</span> <span class="src">agent·exploit</span>组合利用链: SSRF → 内网 DNS → RCE</div>
+          <div class="logline"><span class="t">00:11:13</span> <span class="lv lv-CRIT">CRIT</span> <span class="src">agent·exploit</span>CVE-2021-4034 确认可利用 (10.0.0.14)</div>
+          <div class="logline"><span class="t">00:11:15</span> <span class="lv lv-INFO">INFO</span> <span class="src">orchestrator</span>等待审批: 建议对 10.0.0.14 执行验证</div>
+        </div>
+      </section>
+
+      <!-- 发现 -->
+      <section class="page" id="page-findings">
+        <div class="panel">
+          <span class="panel-title">发现 · 5 条（命令行支持 findings --sev crit 过滤）</span>
+          <div class="frow"><span class="badge b-crit">CRIT</span><span>CVE-2021-4034 Pkexec 本地提权</span><span class="tgt">10.0.0.14</span><span class="conf">置信 96%</span></div>
+          <div class="frow"><span class="badge b-high">HIGH</span><span>CVE-2022-22965 Spring4Shell RCE</span><span class="tgt">10.0.0.22</span><span class="conf">置信 88%</span></div>
+          <div class="frow"><span class="badge b-med">MED</span><span>CVE-2021-44228 Log4Shell JNDI 注入</span><span class="tgt">10.0.0.31</span><span class="conf">置信 74%</span></div>
+          <div class="frow"><span class="badge b-low">LOW</span><span>TLS 1.0 弱协议 / 弱证书链</span><span class="tgt">10.0.0.7</span><span class="conf">置信 99%</span></div>
+          <div class="frow"><span class="badge b-info">INFO</span><span>目录遍历 /backup/ 可列</span><span class="tgt">10.0.0.41</span><span class="conf">置信 55%</span></div>
+        </div>
+      </section>
+
+      <!-- 控制台：输入在底部命令行，这里只放输出历史 -->
+      <section class="page" id="page-console">
+        <div class="panel" style="height:100%;">
+          <span class="panel-title">控制台 · 命令输出历史（输入请用底部命令行）</span>
+          <div id="consoleOut"></div>
+        </div>
+      </section>
+
+      <!-- 设置 -->
+      <section class="page" id="page-settings">
+        <div class="set-grid">
+          <div class="panel">
+            <span class="panel-title">LLM 配置</span>
+            <div class="form-grid">
+              <label>服务商</label>
+              <select id="fProvider" data-native="1">
+                <option>OpenAI</option><option>Anthropic</option><option>DeepSeek</option>
+                <option>通义千问</option><option>Ollama（本地）</option><option>自定义</option>
+              </select>
+              <label>模型</label>
+              <input id="fModel" data-native="1" list="dlModels" value="gpt-4o">
+              <datalist id="dlModels">
+                <option value="gpt-4o"></option><option value="gpt-4o-mini"></option>
+                <option value="claude-3-5-sonnet"></option><option value="deepseek-chat"></option>
+                <option value="qwen-max"></option><option value="llama3.1"></option>
+              </datalist>
+              <label>Base URL</label>
+              <input id="fBase" data-native="1" value="https://api.openai.com/v1">
+              <label>API Key</label>
+              <div style="display:flex; gap:6px; align-items:center;">
+                <input id="fKey" data-native="1" type="password" value="sk-demo1234567890abcd">
+                <button class="tbtn" id="btnKeyVis" type="button">显示</button>
+                <span class="keybadge" id="keyBadge">已保存</span>
+              </div>
+              <label>温度</label>
+              <input id="fTemp" data-native="1" type="number" value="0.2" min="0" max="2" step="0.1">
+            </div>
+            <div class="btn-row">
+              <button class="tbtn primary" id="btnLLMTest" type="button">测试连接</button>
+              <button class="tbtn" id="btnLLMSave" type="button">保存</button>
+              <button class="tbtn" id="btnLLMReset" type="button">恢复默认</button>
+              <span class="keybadge">等价命令：llm model / llm key / llm test</span>
+            </div>
+            <div class="status-line" id="llmStatus">尚未测试</div>
+          </div>
+          <div>
+            <div class="panel">
+              <span class="panel-title">作用域与授权</span>
+              <div class="form-grid">
+                <label>授权到期</label>
+                <input id="fScopeTo" data-native="1" type="date" value="2026-11-01">
+                <label>排除规则</label>
+                <input id="fScopeEx" data-native="1" value="*.internal">
+                <label>只读模式</label>
+                <label style="text-align:left;"><input type="checkbox" id="fReadonly" data-native="1" style="width:auto;"> 只探测，不执行验证</label>
+              </div>
+              <div class="btn-row">
+                <button class="tbtn" id="btnScopeSave" type="button">保存作用域</button>
+              </div>
+              <div class="status-line">保存后即时更新顶部作用域横幅（单一真相来源）</div>
+            </div>
+            <div class="panel">
+              <span class="panel-title">外观</span>
+              <div class="radio-row">
+                <label><input type="radio" name="theme" value="light" checked> 浅色</label>
+                <label><input type="radio" name="theme" value="dark"> 深色</label>
+              </div>
+              <div class="status-line">主题切换会同时改变本原型（预览 palette 双主题效果）</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 帮助浮层：只覆盖主体区，作用域横幅永不被遮 -->
+      <div class="help-overlay" id="helpOverlay">
+        <div class="help-panel">
+          <h3>命令（按 : 呼出命令行，输入即补全）</h3>
+          <div class="cmdrow"><span class="c">help</span><span class="d">查看全部命令与快捷键</span></div>
+          <div class="cmdrow"><span class="c">config [llm]</span><span class="d">打开设置页；跟 llm 直接定位 LLM 配置</span></div>
+          <div class="cmdrow"><span class="c">scan &lt;cidr|host&gt;</span><span class="d">启动扫描，如 scan 10.0.0.5</span></div>
+          <div class="cmdrow"><span class="c">llm model &lt;name&gt;</span><span class="d">切换模型，如 llm model gpt-4o-mini</span></div>
+          <div class="cmdrow"><span class="c">llm key &lt;sk-...&gt;</span><span class="d">设置 API Key</span></div>
+          <div class="cmdrow"><span class="c">llm test</span><span class="d">测试 LLM 连通性</span></div>
+          <div class="cmdrow"><span class="c">findings [--sev x]</span><span class="d">查看 / 过滤发现</span></div>
+          <div class="cmdrow"><span class="c">scope</span><span class="d">查看当前授权作用域</span></div>
+          <div class="cmdrow"><span class="c">export &lt;file&gt;</span><span class="d">导出报告，如 export report.md</span></div>
+          <div class="cmdrow"><span class="c">quit</span><span class="d">退出</span></div>
+          <h3>快捷键</h3>
+          <div class="hk">
+            <div><b>:</b> / <b>/</b>　呼出命令行</div>
+            <div><b>Tab</b> / <b>←→</b>　翻页（补全浮层中为补全）</div>
+            <div><b>↑↓</b>　选择补全项</div>
+            <div><b>Enter</b>　执行命令</div>
+            <div><b>Esc</b>　关闭浮层 / 退出命令行</div>
+            <div><b>?</b>　帮助</div>
+          </div>
+          <div class="rule">输入规则：命令行激活时字符键一律进输入框（q 不会误退出程序）；Esc 才退出命令行。</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 行5 命令行（新增，常驻） -->
+    <div class="t-cmdbar" id="cmdbar">
+      <div class="ac-popup" id="acPopup">
+        <div class="ac-title"><span>命令补全</span><span id="acCount"></span></div>
+        <div id="acRows"></div>
+      </div>
+      <span class="prompt">❯</span>
+      <div class="cmdline" id="cmdline">
+        <span class="typed" id="cmdTyped"></span><span class="ghost" id="cmdGhost"></span><span class="cursor"></span>
+        <input id="cmdHidden" readonly tabindex="-1" aria-hidden="true">
+      </div>
+      <span class="cmd-hint" id="cmdHint">按 : 输入命令 · Tab 补全</span>
+    </div>
+
+    <!-- 行6 页脚 -->
+    <div class="t-footer">
+      <span>Tab/←→ 翻页 · ↑↓ 选择 · : 命令 · ? 帮助 · q 退出</span>
+      <span class="live">● 进行中</span>
+    </div>
+  </div>
+
+  <!-- ================= 设计说明 ================= -->
+  <div class="notes">
+    <h2><b>设计说明</b> — 改了什么、为什么、怎么落地</h2>
+
+    <div class="note-card">
+      <b>1. 新增常驻命令行（核心诉求：配置 LLM 不用再翻代码）</b>
+      <ul>
+        <li>底部固定一行 <b>❯ 输入行</b>，任何页面按 <b>:</b> 或 <b>/</b> 即呼出，输入即弹出补全（命令名 + 描述 + 用法示例），不用先切到控制台页。</li>
+        <li>配置 LLM 有两条路：<b>快路</b>——一行命令 <code>llm model gpt-4o</code> / <code>llm key sk-...</code> / <code>llm test</code>，即时生效；<b>慢路</b>——<code>:config llm</code> 打开设置页表单（服务商/模型/Base URL/Key/温度），适合首次配置和不确定参数时。</li>
+        <li>控制台页回归本行：只放<b>输出历史</b>。输入与输出分离，回看时不会被输入框挤占。</li>
+        <li>顶栏在「状态·目标·计时」铁律之外增加一个 <b>LLM 状态位</b>（当前模型），配置错误第一时间可见。</li>
+      </ul>
+    </div>
+
+    <div class="note-card">
+      <b>2. 布局配方变化（对应 layout.rs 的 root()，只加一行）</b>
+      <pre>现状：  头1 · 横幅2 · 页签1 · 主体(弹) · 脚1
+新增：  头1 · 横幅2 · 页签1 · 主体(弹) · <b>命令行1</b> · 脚1</pre>
+      root() 的 Constraint 数组插入一条 <code>Length(1)</code>，主体 Min(0) 自动让位——正如注释里预留的「审批条」扩展点，改布局仍然只碰 layout.rs 一个文件。
+    </div>
+
+    <div class="note-card">
+      <b>3. 设置页为什么是「第 5 个页签」而不是模态框</b>
+      你的架构里 Page 枚举 + renderer 注册表就是现成的页面扩展点（加变体 + 加一行注册，编译器逼你补全）。模态框需要另造一套 overlay 状态机和焦点管理，与现有机制重复。所以：<b>设置 = Page::Settings</b>，<code>:config</code> 命令只是导航过去；后续若想要「快速编辑」体验，把 llm model 这类一行命令做成即时生效即可（原型里已演示）。
+    </div>
+
+    <div class="note-card">
+      <b>4. 交互规则（输入优先，防止误触）</b>
+      <table>
+        <tr><th>按键</th><th>行为</th></tr>
+        <tr><td>: / /</td><td>呼出命令行（首字符自动填入）</td></tr>
+        <tr><td>Tab</td><td>补全浮层中=补全到选中项；否则=翻页</td></tr>
+        <tr><td>↑ ↓</td><td>在补全项间移动（循环）</td></tr>
+        <tr><td>Enter</td><td>执行；结果进控制台历史</td></tr>
+        <tr><td>Esc</td><td>关浮层 → 再按退出命令行</td></tr>
+        <tr><td>q</td><td>仅在不输入时退出；命令行激活时 q 是普通字符</td></tr>
+      </table>
+    </div>
+
+    <div class="note-card">
+      <b>5. 落地到代码的映射（供你自行写入，保持指导式协作）</b>
+      <ul>
+        <li><code>layout.rs</code>：root() 加 Length(1) 命令行行，RootAreas 加 cmdbar 字段。</li>
+        <li><code>types.rs</code>：Page 加 <code>Settings</code>（ALL/CHAIN 同步）；App 加 CommandLine 状态（buffer、补全索引、history）。</li>
+        <li><code>chrome.rs</code>：新增 cmdbar() / completion_popup() 零件，样式进 palette.rs（prompt=accent、选中=selected 复用现有配色）。</li>
+        <li><code>controller.rs</code>：键位路由——表单焦点态（设置页）与命令行态两套，Esc 是唯一「后退」键。</li>
+        <li>命令注册表放 orchestration/command（已有空模块），视图只消费——命令清单仍是唯一真相来源。</li>
+      </ul>
+    </div>
+
+    <div class="note-card">
+      <b>6. 本原型范围</b>
+      纯 HTML/CSS/JS 单文件，无外部依赖；演示数据（扫描 62%、五级发现各 1 条）与现界面一致；所有命令执行为模拟输出，不会真正发包或写配置。可直接把此文件当验收基线：TUI 实现后逐屏对照。
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var $ = function(s){ return document.querySelector(s); };
+
+  /* ---------------- 状态 ---------------- */
+  var state = {
+    page: "cockpit",
+    cmd: "",
+    acOpen: false,
+    acIndex: 0,
+    acItems: [],
+    history: [],
+    elapsed: 4275, /* 00:11:15 */
+    llm: { provider: "OpenAI", model: "gpt-4o", key: "sk-demo1234567890abcd", base: "https://api.openai.com/v1", temp: 0.2 }
+  };
+
+  /* ---------------- 命令注册表 ---------------- */
+  var CMDS = [
+    { name: "help",            desc: "查看全部命令与快捷键" },
+    { name: "config",          desc: "打开设置页" },
+    { name: "config llm",      desc: "打开设置页并定位 LLM 配置" },
+    { name: "scan",            desc: "启动扫描", usage: "scan 10.0.0.5" },
+    { name: "llm model",       desc: "切换模型", usage: "llm model gpt-4o-mini" },
+    { name: "llm key",         desc: "设置 API Key", usage: "llm key sk-..." },
+    { name: "llm test",        desc: "测试 LLM 连通性" },
+    { name: "findings",        desc: "查看 / 过滤发现", usage: "findings --sev crit" },
+    { name: "activity",        desc: "查看活动流" },
+    { name: "scope",           desc: "查看当前授权作用域" },
+    { name: "export",          desc: "导出报告", usage: "export report.md" },
+    { name: "quit",            desc: "退出" }
+  ];
+
+  /* ---------------- 工具 ---------------- */
+  function out(type, text){
+    state.history.push({ type: type, text: text });
+    if (state.history.length > 60) state.history.shift();
+    renderConsole();
+  }
+  function fmtClock(s){
+    var h = Math.floor(s/3600), m = Math.floor((s%3600)/60), x = s%60;
+    return (h<10?"0":"")+h+":"+(m<10?"0":"")+m+":"+(x<10?"0":"")+x;
+  }
+  function maskKey(k){
+    if (!k || k.length < 12) return k;
+    return k.slice(0,6) + "••••••••" + k.slice(-4);
+  }
+
+  /* ---------------- 渲染 ---------------- */
+  function renderCmdline(){
+    $("#cmdTyped").textContent = state.cmd;
+    var ghost = "";
+    if (state.acOpen && state.acItems.length){
+      var top = state.acItems[state.acIndex] || state.acItems[0];
+      if (top && top.name.indexOf(state.cmd) === 0 && top.name !== state.cmd){
+        ghost = top.name.slice(state.cmd.length);
+      }
+    }
+    $("#cmdGhost").textContent = ghost;
+    $("#cmdHint").textContent = state.acOpen
+      ? "↑↓ 选择 · Tab 补全 · Enter 执行 · Esc 关闭"
+      : "按 : 输入命令 · Tab 补全 · Enter 执行";
+  }
+  function renderAc(){
+    var popup = $("#acPopup");
+    if (!state.acOpen || !state.acItems.length){ popup.classList.remove("open"); return; }
+    popup.classList.add("open");
+    $("#acCount").textContent = (state.acIndex+1) + "/" + state.acItems.length;
+    var html = "";
+    state.acItems.forEach(function(it, i){
+      var ds = it.desc + (it.usage ? "　eg: " + it.usage : "");
+      html += '<div class="ac-row' + (i===state.acIndex?" sel":"") + '" data-i="'+i+'">'
+           +   '<span class="nm">' + it.name + '</span>'
+           +   '<span class="ds">' + ds + '</span>'
+           + '</div>';
+    });
+    $("#acRows").innerHTML = html;
+  }
+  function renderConsole(){
+    var box = $("#consoleOut");
+    var html = "";
+    state.history.forEach(function(l){
+      if (l.type === "cmd"){
+        html += '<div class="console-line cmd"><span class="p">❯</span> ' + escapeHtml(l.text) + '</div>';
+      } else {
+        html += '<div class="console-line ' + l.type + '">' + escapeHtml(l.text) + '</div>';
+      }
+    });
+    box.innerHTML = html;
+    box.parentElement.scrollTop = box.parentElement.scrollHeight;
+  }
+  function escapeHtml(s){
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+  function renderTabs(){
+    var tabs = document.querySelectorAll("#tabs .tab");
+    tabs.forEach(function(t){
+      t.classList.toggle("active", t.dataset.page === state.page);
+    });
+  }
+  function renderHeader(){
+    $("#hdrLLM").textContent = "LLM·" + state.llm.model;
+  }
+  function refresh(){ renderCmdline(); renderAc(); renderTabs(); renderHeader(); }
+
+  /* ---------------- 页面 ---------------- */
+  var PAGES = ["cockpit","activity","findings","console","settings"];
+  function setPage(p){
+    state.page = p;
+    PAGES.forEach(function(name){
+      var el = document.getElementById("page-" + name);
+      if (el) el.classList.toggle("active", name === p);
+    });
+    renderTabs();
+  }
+  function cyclePage(d){
+    var i = PAGES.indexOf(state.page);
+    setPage(PAGES[(i + d + PAGES.length) % PAGES.length]);
+  }
+
+  /* ---------------- 补全 ---------------- */
+  function normCmd(raw){ return raw.replace(/^[:/]\s*/, "").trim(); }
+  function computeMatches(){
+    var q = normCmd(state.cmd).toLowerCase();
+    if (!q){ state.acItems = []; state.acOpen = false; state.acIndex = 0; return; }
+    var starts = CMDS.filter(function(c){ return c.name.toLowerCase().indexOf(q) === 0; });
+    var contains = CMDS.filter(function(c){
+      return c.name.toLowerCase().indexOf(q) !== 0 && c.name.toLowerCase().indexOf(q) !== -1;
+    });
+    state.acItems = starts.concat(contains).slice(0, 7);
+    state.acOpen = state.acItems.length > 0;
+    state.acIndex = 0;
+  }
+  function moveAc(d){
+    if (!state.acItems.length) return;
+    state.acIndex = (state.acIndex + d + state.acItems.length) % state.acItems.length;
+  }
+  function completeSel(){
+    if (!state.acOpen || !state.acItems.length) return;
+    var it = state.acItems[state.acIndex];
+    state.cmd = it.name + (it.name.indexOf(" ") === -1 ? " " : " ");
+    computeMatches();
+  }
+
+  /* ---------------- 执行 ---------------- */
+  function submitCmd(){
+    var raw = state.cmd.trim();
+    if (!raw){ state.acOpen = false; refresh(); return; }
+    out("cmd", raw);
+    state.cmd = "";
+    state.acOpen = false;
+    state.acItems = [];
+    dispatch(raw);
+    refresh();
+  }
+  function runCommand(raw){ out("cmd", raw); dispatch(raw); }
+
+  function dispatch(raw){
+    var norm = normCmd(raw);
+    if (!norm) return;
+    var parts = norm.split(/\s+/);
+    var head = parts[0], rest = parts.slice(1), arg = rest.join(" ");
+    switch (head){
+      case "help":
+        toggleHelp(true);
+        out("sys", "已显示命令帮助（Esc 关闭）");
+        break;
+      case "config":
+        setPage("settings");
+        if (rest[0] === "llm"){ $("#fModel").focus(); out("sys", "→ 设置 · LLM 配置"); }
+        else out("sys", "→ 已打开设置页");
+        break;
+      case "scan":
+        if (!arg){ out("err", "✗ 缺少目标 · 用法: scan <cidr|host>"); break; }
+        out("sys", "↻ 已入队: nmap -sV --top-ports 1000 " + arg);
+        setPage("activity");
+        setTimeout(function(){ out("ok", "✓ 扫描进行中 · 演示环境不会真正发包"); }, 500);
+        break;
+      case "llm":
+        if (rest[0] === "model" && rest[1]){
+          var old = state.llm.model;
+          state.llm.model = rest[1];
+          $("#fModel").value = rest[1];
+          out("ok", "✓ 模型已切换: " + old + " → " + rest[1]);
+        } else if (rest[0] === "key" && rest[1]){
+          state.llm.key = rest[1];
+          $("#fKey").value = rest[1];
+          out("ok", "✓ API Key 已更新（演示: 仅内存）");
+        } else if (rest[0] === "test"){
+          testLLM();
+        } else {
+          out("err", "✗ 用法: llm model <name> | llm key <sk-...> | llm test");
+        }
+        break;
+      case "findings":
+        setPage("findings");
+        out("sys", arg ? "→ 发现 · 过滤 " + arg : "→ 发现列表");
+        break;
+      case "activity": setPage("activity"); break;
+      case "scope":
+        out("out", "授权 2026-10-01 ~ 2026-11-01 · 排除 *.internal · 目标 10.0.0.0/24");
+        break;
+      case "export":
+        if (!arg){ out("err", "✗ 用法: export <file>"); break; }
+        out("ok", "✓ 报告已导出: ./" + arg);
+        break;
+      case "quit": case "q":
+        out("sys", "（演示原型不会真正退出）");
+        break;
+      default:
+        out("err", "✗ 未知命令: " + head + " · 输入 help 查看可用命令");
+    }
+  }
+
+  /* ---------------- 帮助浮层 ---------------- */
+  function toggleHelp(force){
+    var ov = $("#helpOverlay");
+    var show = (typeof force === "boolean") ? force : !ov.classList.contains("open");
+    ov.classList.toggle("open", show);
+  }
+
+  /* ---------------- LLM 测试 / 保存 ---------------- */
+  function testLLM(){
+    var st = $("#llmStatus");
+    st.className = "status-line";
+    st.textContent = "↻ 正在测试 " + state.llm.base + " ...";
+    out("sys", "↻ 正在测试 " + state.llm.base + " ...");
+    setTimeout(function(){
+      st.className = "status-line ok";
+      st.textContent = "✓ 连接成功 · 模型 " + state.llm.model + " 可用 · 延迟 312ms";
+      out("ok", "✓ 连接成功 · 模型 " + state.llm.model + " 可用 · 延迟 312ms");
+    }, 700);
+  }
+  function saveLLM(){
+    state.llm.provider = $("#fProvider").value;
+    state.llm.model = $("#fModel").value;
+    state.llm.base = $("#fBase").value;
+    state.llm.key = $("#fKey").value;
+    state.llm.temp = parseFloat($("#fTemp").value) || 0.2;
+    renderHeader();
+    out("ok", "✓ LLM 配置已保存: " + state.llm.provider + " / " + state.llm.model + "（演示: 仅内存）");
+  }
+  function saveScope(){
+    var to = $("#fScopeTo").value, ex = $("#fScopeEx").value;
+    $("#scopeBanner").textContent = "作用域: 授权 2026-10-01 ~ " + to + " · 排除 " + ex;
+    out("ok", "✓ 作用域已更新: 授权至 " + to + " · 排除 " + ex);
+  }
+
+  /* ---------------- 键盘路由 ---------------- */
+  function isFormTarget(t){ return !!(t && t.dataset && t.dataset.native === "1"); }
+
+  document.addEventListener("keydown", function(e){
+    if (isFormTarget(e.target)){
+      if (e.key === "Escape"){ e.target.blur(); }
+      return; /* 表单内交还原生输入 */
+    }
+    switch (e.key){
+      case "Escape":
+        e.preventDefault();
+        if ($("#helpOverlay").classList.contains("open")){ toggleHelp(false); }
+        else if (state.acOpen){ state.acOpen = false; refresh(); }
+        else { state.cmd = ""; refresh(); }
+        break;
+      case "Enter":
+        e.preventDefault(); submitCmd(); break;
+      case "Backspace":
+        e.preventDefault();
+        state.cmd = state.cmd.slice(0, -1);
+        computeMatches(); refresh();
+        break;
+      case "Tab":
+        e.preventDefault();
+        if (state.acOpen){ completeSel(); }
+        else { cyclePage(1); }
+        refresh();
+        break;
+      case "ArrowLeft":
+        if (!state.acOpen){ e.preventDefault(); cyclePage(-1); }
+        break;
+      case "ArrowRight":
+        if (!state.acOpen){ e.preventDefault(); cyclePage(1); }
+        break;
+      case "ArrowUp":
+        if (state.acOpen){ e.preventDefault(); moveAc(-1); refresh(); }
+        break;
+      case "ArrowDown":
+        if (state.acOpen){ e.preventDefault(); moveAc(1); refresh(); }
+        break;
+      case "?":
+        e.preventDefault(); toggleHelp(); break;
+      case "q":
+        if (!state.acOpen){ e.preventDefault(); out("sys", "（演示原型不会真正退出）"); }
+        break;
+      default:
+        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey){
+          e.preventDefault();
+          state.cmd += e.key;
+          computeMatches(); refresh();
+        }
+    }
+  });
+
+  /* ---------------- 事件绑定 ---------------- */
+  $("#cmdbar").addEventListener("click", function(){ $("#cmdHidden").focus({preventScroll:true}); });
+  $("#acRows").addEventListener("click", function(e){
+    var row = e.target.closest(".ac-row");
+    if (!row) return;
+    var i = parseInt(row.dataset.i, 10);
+    state.acIndex = i;
+    var it = state.acItems[i];
+    if (it){ state.cmd = it.name + " "; computeMatches(); refresh(); $("#cmdHidden").focus({preventScroll:true}); }
+  });
+  $("#acRows").addEventListener("mousemove", function(e){
+    var row = e.target.closest(".ac-row");
+    if (!row) return;
+    var i = parseInt(row.dataset.i, 10);
+    if (i !== state.acIndex){ state.acIndex = i; renderAc(); renderCmdline(); }
+  });
+  document.querySelectorAll("#tabs .tab").forEach(function(t){
+    t.addEventListener("click", function(){ setPage(t.dataset.page); });
+  });
+  document.querySelectorAll(".qchip").forEach(function(b){
+    b.addEventListener("click", function(){ runCommand(b.dataset.cmd); });
+  });
+  $("#btnLLMTest").addEventListener("click", testLLM);
+  $("#btnLLMSave").addEventListener("click", saveLLM);
+  $("#btnLLMReset").addEventListener("click", function(){
+    $("#fModel").value = "gpt-4o"; $("#fBase").value = "https://api.openai.com/v1";
+    $("#fTemp").value = "0.2"; $("#fProvider").value = "OpenAI";
+    out("sys", "已恢复默认 LLM 配置（未保存）");
+  });
+  $("#btnScopeSave").addEventListener("click", saveScope);
+  $("#btnKeyVis").addEventListener("click", function(){
+    var f = $("#fKey");
+    var show = f.type === "password";
+    f.type = show ? "text" : "password";
+    this.textContent = show ? "隐藏" : "显示";
+  });
+  document.querySelectorAll('input[name="theme"]').forEach(function(r){
+    r.addEventListener("change", function(){ setTheme(this.value); });
+  });
+
+  /* 原型操作按钮 */
+  $("#btnDemoCmd").addEventListener("click", function(){
+    state.cmd = ":"; computeMatches(); refresh();
+    $("#cmdHidden").focus({preventScroll:true});
+  });
+  $("#btnDemoSet").addEventListener("click", function(){ setPage("settings"); });
+  $("#btnDemoConsole").addEventListener("click", function(){ setPage("console"); });
+  $("#btnDemoHelp").addEventListener("click", function(){ toggleHelp(); });
+  $("#btnTheme").addEventListener("click", function(){
+    setTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
+  });
+  function setTheme(t){
+    document.documentElement.dataset.theme = t;
+    document.querySelectorAll('input[name="theme"]').forEach(function(r){ r.checked = (r.value === t); });
+  }
+
+  /* ---------------- 计时器 ---------------- */
+  setInterval(function(){
+    state.elapsed++;
+    $("#hdrClock").textContent = fmtClock(state.elapsed);
+  }, 1000);
+
+  /* ---------------- 初始控制台内容 ---------------- */
+  out("sys", "StarEye v0.1 · AI 渗透测试代理（演示数据）");
+  out("sys", "输入 help 查看命令 · 按 : 随时呼出命令行");
+  out("cmd", "scan 10.0.0.0/24");
+  out("out", "↻ nmap -sV --top-ports 1000 10.0.0.0/24 已入队");
+  out("ok",  "✓ 侦察完成 · 254 hosts · 扫描进行中 62%");
+  out("cmd", "llm model gpt-4o");
+  out("ok",  "✓ 模型已切换: gpt-4o-mini → gpt-4o");
+
+  refresh();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+# cargo-deny 配置：依赖许可证 / 重复版本 / 安全公告审计
+# 文档：https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = true
+
+# ── 许可证白名单 ──
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+]
+# 出现未列出的许可证时判定方式：warn（先观察，收紧时改 deny）
+confidence-threshold = 0.8
+
+# ── 重复/禁用依赖 ──
+[bans]
+multiple-versions = "warn"     # 同一 crate 多版本共存仅提示
+wildcards = "deny"             # 禁止通配符版本依赖
+
+# ── 安全公告（RUSTSEC）──
+[advisories]
+yanked = "deny"
+# 暂时忽略的公告可在此列出，例如：
+# ignore = ["RUSTSEC-2023-0071"]
+
+# ── 来源限制：仅允许 crates.io 与 git 指定仓库 ──
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

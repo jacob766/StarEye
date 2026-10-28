@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+
+# 同一分支上的旧任务自动取消，节省配额
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ── 格式 / lint / 测试：Linux 为主，Windows/macOS 冒烟验证 ──
+  check:
+    name: Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (with clippy & rustfmt)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo (target dir + registry)
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (warnings as errors)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build
+        run: cargo build --verbose --all-features
+
+      - name: Test
+        run: cargo test --verbose --all-features
+
+  # ── 依赖安全与许可证审计（仅 Linux 跑一份即可）──
+  audit:
+    name: Supply-chain audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo deny check (licenses / bans / advisories)
+        run: cargo deny check
+        continue-on-error: true   # 首次可容忍缺 deny.toml 或规则未配置，稳定后移除本行
+
+      - name: cargo audit (RUSTSEC advisories)
+        run: cargo audit
+        continue-on-error: true   # 同上
+
+  # ── 提交信息校验（PR 标题 + 全部 commit）──
+  commits:
+    name: Conventional commits
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commit messages
+        uses: wagoid/commitlint-github-action@v6
